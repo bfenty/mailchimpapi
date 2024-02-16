@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"net/http"
 	"os"
@@ -160,7 +161,7 @@ func main() {
 	db := opendb()
 	defer db.Close()
 
-	//MailChimp(db)
+	// MailChimp(db)
 	Cratejoy(db)
 }
 
@@ -199,13 +200,13 @@ func MailChimp(db *sql.DB) {
 	log.Debug("Raw JSON response: ", string(body))
 
 	// Parse the response JSON to CSV
-	log.Info("Creating CSV file")
-	file, err := os.Create("mailchimp-audience.csv")
-	if err != nil {
-		log.WithError(err).Error("Failed to create CSV file")
-		return
-	}
-	defer file.Close()
+	// log.Info("Creating CSV file")
+	// file, err := os.Create("mailchimp-audience.csv")
+	// if err != nil {
+	// 	log.WithError(err).Error("Failed to create CSV file")
+	// 	return
+	// }
+	// defer file.Close()
 
 	log.Info("Parsing JSON response")
 
@@ -305,7 +306,7 @@ func insertMembers(db *sql.DB, response Response) error {
 
 func Cratejoy(db *sql.DB) {
 	// Fetch data from Cratejoy
-	username := "CRATEJOY_CLIENT"
+	username := os.Getenv("CRATEJOY_CLIENT")
 	password := os.Getenv("CRATEJOY_API_KEY")
 	err := fetchCratejoyData(username, password, db)
 	if err != nil {
@@ -377,6 +378,7 @@ func fetchCratejoyData(username, password string, db *sql.DB) error {
 		authStr := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
 		req.Header.Add("Authorization", "Basic "+authStr)
 		log.Debug("Authorization header set for basic authentication")
+		log.Debug("Authorization Header: ", req.Header.Get("Authorization"))
 
 		// Send the API request
 		client := &http.Client{}
@@ -387,6 +389,16 @@ func fetchCratejoyData(username, password string, db *sql.DB) error {
 			return err
 		}
 		defer resp.Body.Close()
+
+		// Check for non-200 status code
+		if resp.StatusCode != http.StatusOK {
+			body, _ := ioutil.ReadAll(resp.Body) // Ignore error here; we're already handling an error case
+			log.WithFields(logrus.Fields{
+				"status_code": resp.StatusCode,
+				"response":    string(body),
+			}).Error("Cratejoy API responded with an error")
+			return fmt.Errorf("Cratejoy API error: %d - %s", resp.StatusCode, string(body))
+		}
 
 		log.Info("Received response from Cratejoy API")
 		log.Debugf("Status Code: %d", resp.StatusCode)
