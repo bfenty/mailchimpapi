@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql" // import MySQL driver
 	"github.com/sirupsen/logrus"
@@ -149,11 +150,11 @@ type TermImage struct {
 	URL                    string `json:"url"`
 }
 
+// setup logging
 var log = logrus.New()
 
+// main function
 func main() {
-	// Set up logrus. For example, to log as JSON instead of the default ASCII formatter:
-	// log.SetFormatter(&logrus.JSONFormatter{})
 	log.SetLevel(logrus.DebugLevel)
 
 	//Open DB Connection
@@ -161,18 +162,20 @@ func main() {
 	db := opendb()
 	defer db.Close()
 
-	// MailChimp(db)
+	MailChimp(db)
 	Cratejoy(db)
 }
 
+// run Mailchimp API
 func MailChimp(db *sql.DB) {
 
 	//Retrieve API credentials
 	apiKey := os.Getenv("apiKey")
 	listID := os.Getenv("listID")
+	count := "1000"
 
 	// Set up the API request to retrieve the first batch of members
-	url := "https://us6.api.mailchimp.com/3.0/lists/" + listID + "/members?fields=members.email_address,members.status,total_items,merge_fields.Subscription+Status&count=100"
+	url := "https://us6.api.mailchimp.com/3.0/lists/" + listID + "/members?fields=members.email_address,members.status,total_items,merge_fields.Subscription+Status&count=" + count
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		log.WithError(err).Error("Failed to create new HTTP request")
@@ -228,11 +231,11 @@ func MailChimp(db *sql.DB) {
 
 	// Retrieve additional members with count and offset
 	totalCount := response.TotalItems
-	offset := 100
+	offset, _ := strconv.Atoi(count)
 
 	for offset < totalCount {
 		// Set up the API request to retrieve the next batch of members
-		url = "https://us6.api.mailchimp.com/3.0/lists/" + listID + "/members?fields=members.email_address,members.status,merge_fields.Subscription+Status&count=100&offset=" + strconv.Itoa(offset)
+		url = "https://us6.api.mailchimp.com/3.0/lists/" + listID + "/members?fields=members.email_address,members.status,merge_fields.Subscription+Status&count=" + count + "&offset=" + strconv.Itoa(offset)
 		req, err = http.NewRequest("GET", url, nil)
 		if err != nil {
 			log.WithError(err).Error("Failed to create new HTTP request for next batch of members")
@@ -274,7 +277,7 @@ func MailChimp(db *sql.DB) {
 	}
 }
 
-// insertMembers inserts members into the database
+// insert Mailchimp Members inserts members into the database
 func insertMembers(db *sql.DB, response Response) error {
 	var valuePlaceholders []string
 	var memberData []interface{}
@@ -304,6 +307,7 @@ func insertMembers(db *sql.DB, response Response) error {
 	return nil
 }
 
+// run Cratejoy API
 func Cratejoy(db *sql.DB) {
 	// Fetch data from Cratejoy
 	username := os.Getenv("CRATEJOY_CLIENT")
@@ -315,53 +319,71 @@ func Cratejoy(db *sql.DB) {
 	}
 }
 
-// insertSubscriptions inserts subscriptions into the database
+// insert Cratejoy Subscriptions inserts subscriptions into the database
 func insertSubscriptions(db *sql.DB, response CratejoyResponse) error {
-	var valuePlaceholders []string
-	var subscriptionData []interface{}
-
-	for _, subscription := range response.Results {
-		// Prepare the SQL statement for each subscription
-		valuePlaceholders = append(valuePlaceholders, "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-
-		// Append the data for each subscription
-		subscriptionData = append(subscriptionData,
-			subscription.Customer.Email,       // Customer Email
-			subscription.Customer.FirstName,   // First Name
-			subscription.Customer.LastName,    // Last Name
-			subscription.Customer.Country,     // Country
-			subscription.Billing.RebillDay,    // Billing RebillDay
-			subscription.Billing.RebillMonths, // Billing RebillMonths
-			subscription.Autorenew,            // Subscription Autorenew
-			subscription.Status,               // Subscription Status
-			subscription.StartDate,            // Subscription StartDate
-			subscription.EndDate)              // Subscription EndDate
-	}
-
-	if len(valuePlaceholders) == 0 {
+	if len(response.Results) == 0 {
 		// No subscriptions to insert
 		return nil
 	}
 
-	stmtText := "REPLACE INTO cratejoy_subscriptions(customer_email, first_name, last_name, country, rebill_day, rebill_months, autorenew, status, start_date, end_date) VALUES " + strings.Join(valuePlaceholders, ",")
-	stmt, err := db.Prepare(stmtText)
+	log.WithFields(logrus.Fields{
+		"records": len(response.Results),
+	}).Debug("Beginning Database Insert")
+	startTime := time.Now() // Start timing the operation
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Use ON DUPLICATE KEY UPDATE to handle collisions
+	stmtText := `INSERT INTO cratejoy_subscriptions(customer_email, first_name, last_name, country, rebill_day, rebill_months, autorenew, status, start_date, end_date)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 ON DUPLICATE KEY UPDATE
+                 first_name=VALUES(first_name), last_name=VALUES(last_name), country=VALUES(country), rebill_day=VALUES(rebill_day), 
+                 rebill_months=VALUES(rebill_months), autorenew=VALUES(autorenew), status=VALUES(status), start_date=VALUES(start_date), end_date=VALUES(end_date)`
+
+	stmt, err := tx.Prepare(stmtText)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 
-	_, err = stmt.Exec(subscriptionData...)
-	if err != nil {
+	for _, subscription := range response.Results {
+		_, err = stmt.Exec(
+			subscription.Customer.Email,
+			subscription.Customer.FirstName,
+			subscription.Customer.LastName,
+			subscription.Customer.Country,
+			subscription.Billing.RebillDay,
+			subscription.Billing.RebillMonths,
+			subscription.Autorenew,
+			subscription.Status,
+			subscription.StartDate,
+			subscription.EndDate,
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
 		return err
 	}
+
+	log.WithFields(logrus.Fields{
+		"duration": time.Since(startTime),
+	}).Debug("Database Insert Successful")
 
 	return nil
 }
 
+// fetch Cratejoy API data
 func fetchCratejoyData(username, password string, db *sql.DB) error {
 	// Define the Cratejoy endpoint for fetching subscriptions
 	baseURL := "https://api.cratejoy.com/v1/subscriptions/"
-	url := baseURL + "?limit=100"
+	url := baseURL + "?limit=500"
 
 	log.Info("Fetching data from Cratejoy API")
 
@@ -410,7 +432,7 @@ func fetchCratejoyData(username, password string, db *sql.DB) error {
 			return err
 		}
 
-		log.Debug("Raw JSON response: ", string(body))
+		// log.Debug("Raw JSON response: ", string(body))
 
 		// Parse the JSON response
 		var response CratejoyResponse
@@ -421,7 +443,7 @@ func fetchCratejoyData(username, password string, db *sql.DB) error {
 		}
 
 		log.Info("Successfully fetched and parsed Cratejoy API data")
-		log.Debugf("CratejoyResponse: %+v", response)
+		// log.Debugf("CratejoyResponse: %+v", response)
 
 		// Insert the subscription data into the database
 		err = insertSubscriptions(db, response)
@@ -441,6 +463,7 @@ func fetchCratejoyData(username, password string, db *sql.DB) error {
 	return nil
 }
 
+// return an open database
 func opendb() (db *sql.DB) {
 	var err error
 	user := os.Getenv("USER")
