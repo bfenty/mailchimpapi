@@ -162,7 +162,7 @@ func main() {
 	db := opendb()
 	defer db.Close()
 
-	MailChimp(db)
+	// MailChimp(db)
 	Cratejoy(db)
 }
 
