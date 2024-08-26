@@ -150,6 +150,53 @@ type TermImage struct {
 	URL                    string `json:"url"`
 }
 
+// Structs for Orders
+type OrderGiftInfo struct {
+	GiftMessage        string `json:"gift_message"`
+	GiftRecipientEmail string `json:"gift_recipient_email"`
+	GiftRecipientName  string `json:"gift_recipient_name"`
+}
+
+type Order struct {
+	ID                   int64         `json:"id"`
+	CardRefundedAmount   int           `json:"card_refunded_amount"`
+	CreditApplied        int           `json:"credit_applied"`
+	CustomerID           int64         `json:"customer_id"`
+	FinancialStatus      string        `json:"financial_status"`
+	FulfillmentStatus    string        `json:"fulfillment_status"`
+	GiftCardDiscount     int           `json:"gift_card_discount"`
+	GiftMessage          string        `json:"gift_message"`
+	GiftRenewalNotif     bool          `json:"gift_renewal_notif"`
+	GrossShipping        int           `json:"gross_shipping"`
+	IsGift               bool          `json:"is_gift"`
+	OrderGiftInfo        OrderGiftInfo `json:"order_gift_info"`
+	IsRenewal            bool          `json:"is_renewal"`
+	IsTest               bool          `json:"is_test"`
+	Note                 string        `json:"note"`
+	PlacedAt             string        `json:"placed_at"`
+	ProratedCharge       int           `json:"prorated_charge"`
+	RefundApplied        int           `json:"refund_applied"`
+	RefundedAmount       int           `json:"refunded_amount"`
+	Status               string        `json:"status"`
+	StoreID              int64         `json:"store_id"`
+	SubTotal             int           `json:"sub_total"`
+	Total                int           `json:"total"`
+	TotalAppFees         int           `json:"total_app_fees"`
+	TotalLabelCost       int           `json:"total_label_cost"`
+	TotalPendingFees     int           `json:"total_pending_fees"`
+	TotalPrice           int           `json:"total_price"`
+	TotalShipping        int           `json:"total_shipping"`
+	TotalTax             int           `json:"total_tax"`
+	TransactionFees      int           `json:"transaction_fees"`
+	TransactionFeeStatus int           `json:"transaction_fee_status"`
+	Type                 string        `json:"type"`
+	URL                  string        `json:"url"`
+}
+
+type CratejoyOrderResponse struct {
+	Results []Order `json:"results"`
+}
+
 // setup logging
 var log = logrus.New()
 
@@ -317,6 +364,125 @@ func Cratejoy(db *sql.DB) {
 		log.WithError(err).Error("Failed to fetch data from Cratejoy")
 		return
 	}
+}
+
+// Insert orders into the Database
+func insertOrders(db *sql.DB, response CratejoyOrderResponse) error {
+	if len(response.Results) == 0 {
+		// No orders to insert
+		return nil
+	}
+
+	// Start time for the function
+	startTime := time.Now()
+	log.WithFields(logrus.Fields{
+		"start_time": startTime,
+		"operation":  "insertOrders",
+	}).Info("Inserting orders into cj_orders table")
+
+	query := `
+		INSERT INTO cj_orders (
+			id, card_refunded_amount, credit_applied, customer_id, financial_status, fulfillment_status, gift_card_discount,
+			gift_message, gift_renewal_notif, gross_shipping, is_gift, order_gift_info, is_renewal, is_test, note, 
+			placed_at, prorated_charge, refund_applied, refunded_amount, status, store_id, sub_total, total, total_app_fees, 
+			total_label_cost, total_pending_fees, total_price, total_shipping, total_tax, transaction_fees, 
+			transaction_fee_status, type, url) 
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON DUPLICATE KEY UPDATE
+		card_refunded_amount = VALUES(card_refunded_amount),
+		credit_applied = VALUES(credit_applied),
+		customer_id = VALUES(customer_id),
+		financial_status = VALUES(financial_status),
+		fulfillment_status = VALUES(fulfillment_status),
+		gift_card_discount = VALUES(gift_card_discount),
+		gift_message = VALUES(gift_message),
+		gift_renewal_notif = VALUES(gift_renewal_notif),
+		gross_shipping = VALUES(gross_shipping),
+		is_gift = VALUES(is_gift),
+		order_gift_info = VALUES(order_gift_info),
+		is_renewal = VALUES(is_renewal),
+		is_test = VALUES(is_test),
+		note = VALUES(note),
+		placed_at = VALUES(placed_at),
+		prorated_charge = VALUES(prorated_charge),
+		refund_applied = VALUES(refund_applied),
+		refunded_amount = VALUES(refunded_amount),
+		status = VALUES(status),
+		store_id = VALUES(store_id),
+		sub_total = VALUES(sub_total),
+		total = VALUES(total),
+		total_app_fees = VALUES(total_app_fees),
+		total_label_cost = VALUES(total_label_cost),
+		total_pending_fees = VALUES(total_pending_fees),
+		total_price = VALUES(total_price),
+		total_shipping = VALUES(total_shipping),
+		total_tax = VALUES(total_tax),
+		transaction_fees = VALUES(transaction_fees),
+		transaction_fee_status = VALUES(transaction_fee_status),
+		type = VALUES(type),
+		url = VALUES(url)`
+
+	recordCount := 0
+
+	for _, order := range response.Results {
+		orderGiftInfo, _ := json.Marshal(order.OrderGiftInfo)
+
+		_, err := db.Exec(query,
+			order.ID,
+			order.CardRefundedAmount,
+			order.CreditApplied,
+			order.CustomerID,
+			order.FinancialStatus,
+			order.FulfillmentStatus,
+			order.GiftCardDiscount,
+			order.GiftMessage,
+			order.GiftRenewalNotif,
+			order.GrossShipping,
+			order.IsGift,
+			string(orderGiftInfo),
+			order.IsRenewal,
+			order.IsTest,
+			order.Note,
+			order.PlacedAt,
+			order.ProratedCharge,
+			order.RefundApplied,
+			order.RefundedAmount,
+			order.Status,
+			order.StoreID,
+			order.SubTotal,
+			order.Total,
+			order.TotalAppFees,
+			order.TotalLabelCost,
+			order.TotalPendingFees,
+			order.TotalPrice,
+			order.TotalShipping,
+			order.TotalTax,
+			order.TransactionFees,
+			order.TransactionFeeStatus,
+			order.Type,
+			order.URL,
+		)
+		if err != nil {
+			log.WithFields(logrus.Fields{
+				"order_id": order.ID,
+				"error":    err,
+			}).Error("Failed to insert or update order in cj_orders table")
+			return err
+		}
+		recordCount++
+	}
+
+	// End time and duration
+	endTime := time.Now()
+	duration := endTime.Sub(startTime)
+
+	log.WithFields(logrus.Fields{
+		"end_time":     endTime,
+		"duration":     duration,
+		"record_count": recordCount,
+	}).Info("Finished inserting or updating orders in cj_orders table")
+
+	return nil
 }
 
 // Helper Functions for Cratejoy
@@ -902,6 +1068,86 @@ func fetchCratejoyData(username, password string, db *sql.DB) error {
 		if err != nil {
 			log.WithError(err).Error("Failed to insert subscriptions into the database")
 			return nil
+		}
+
+		// Check if there is a next page. If not, break the loop
+		if response.Next == "" {
+			break
+		}
+
+		// Update the URL to the next page URL
+		url = baseURL + response.Next
+	}
+	return nil
+}
+
+// fetchCratejoyOrders fetches order data from the Cratejoy API and processes it
+func fetchCratejoyOrders(username, password string, db *sql.DB) error {
+	// Define the Cratejoy endpoint for fetching orders
+	baseURL := "https://api.cratejoy.com/v1/orders/"
+	url := baseURL + "?limit=500"
+
+	log.Info("Fetching order data from Cratejoy API")
+
+	for {
+		log.Debug("Cratejoy API URL: ", url)
+		// Set up the HTTP request
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			log.WithError(err).Error("Failed to create new HTTP request")
+			return err
+		}
+
+		// Encode username and password for basic authentication
+		authStr := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
+		req.Header.Add("Authorization", "Basic "+authStr)
+		log.Debug("Authorization header set for basic authentication")
+
+		// Send the API request
+		client := &http.Client{}
+		log.Info("Sending request to Cratejoy API")
+		resp, err := client.Do(req)
+		if err != nil {
+			log.WithError(err).Error("Failed to send API request")
+			return err
+		}
+		defer resp.Body.Close()
+
+		// Check for non-200 status code
+		if resp.StatusCode != http.StatusOK {
+			body, _ := ioutil.ReadAll(resp.Body) // Ignore error here; we're already handling an error case
+			log.WithFields(logrus.Fields{
+				"status_code": resp.StatusCode,
+				"response":    string(body),
+			}).Error("Cratejoy API responded with an error")
+			return fmt.Errorf("Cratejoy API error: %d - %s", resp.StatusCode, string(body))
+		}
+
+		log.Info("Received response from Cratejoy API")
+		log.Debugf("Status Code: %d", resp.StatusCode)
+
+		// Read the API response
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.WithError(err).Error("Failed to read response body")
+			return err
+		}
+
+		// Parse the JSON response
+		var response CratejoyOrderResponse
+		err = json.Unmarshal(body, &response)
+		if err != nil {
+			log.WithError(err).Error("Failed to unmarshal JSON response")
+			return err
+		}
+
+		log.Info("Successfully fetched and parsed Cratejoy order data")
+
+		// Insert the order data into the database
+		err = insertOrders(db, response)
+		if err != nil {
+			log.WithError(err).Error("Failed to insert orders into the database")
+			return err
 		}
 
 		// Check if there is a next page. If not, break the loop
