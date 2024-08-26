@@ -319,7 +319,6 @@ func Cratejoy(db *sql.DB) {
 	}
 }
 
-// insert Cratejoy Subscriptions inserts subscriptions into the database
 func insertSubscriptions(db *sql.DB, response CratejoyResponse) error {
 	if len(response.Results) == 0 {
 		// No subscriptions to insert
@@ -337,32 +336,53 @@ func insertSubscriptions(db *sql.DB, response CratejoyResponse) error {
 	}
 	defer tx.Rollback()
 
-	// Use ON DUPLICATE KEY UPDATE to handle collisions
-	stmtText := `INSERT INTO cratejoy_subscriptions(customer_email, first_name, last_name, country, rebill_day, rebill_months, autorenew, status, start_date, end_date)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	// Batch size
+	batchSize := 100
+
+	for i := 0; i < len(response.Results); i += batchSize {
+		end := i + batchSize
+		if end > len(response.Results) {
+			end = len(response.Results)
+		}
+
+		// Prepare a single statement with multiple placeholders
+		valueStrings := make([]string, 0, batchSize)
+		valueArgs := make([]interface{}, 0, batchSize*10) // 10 is the number of columns
+
+		for _, subscription := range response.Results[i:end] {
+			// Parse dates
+			startDate, err := parseDate(subscription.StartDate)
+			if err != nil {
+				return err
+			}
+			endDate, err := parseDate(subscription.EndDate)
+			if err != nil {
+				return err
+			}
+
+			valueStrings = append(valueStrings, "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+			valueArgs = append(valueArgs,
+				subscription.Customer.Email,
+				subscription.Customer.FirstName,
+				subscription.Customer.LastName,
+				subscription.Customer.Country,
+				subscription.Billing.RebillDay,
+				subscription.Billing.RebillMonths,
+				subscription.Autorenew,
+				subscription.Status,
+				startDate,
+				endDate,
+			)
+		}
+
+		// Combine the statement
+		stmtText := fmt.Sprintf(`INSERT INTO customers.cj_subscriptions(customer_email, first_name, last_name, country, rebill_day, rebill_months, autorenew, status, start_date, end_date)
+                 VALUES %s
                  ON DUPLICATE KEY UPDATE
                  first_name=VALUES(first_name), last_name=VALUES(last_name), country=VALUES(country), rebill_day=VALUES(rebill_day), 
-                 rebill_months=VALUES(rebill_months), autorenew=VALUES(autorenew), status=VALUES(status), start_date=VALUES(start_date), end_date=VALUES(end_date)`
+                 rebill_months=VALUES(rebill_months), autorenew=VALUES(autorenew), status=VALUES(status), start_date=VALUES(start_date), end_date=VALUES(end_date)`, strings.Join(valueStrings, ","))
 
-	stmt, err := tx.Prepare(stmtText)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-
-	for _, subscription := range response.Results {
-		_, err = stmt.Exec(
-			subscription.Customer.Email,
-			subscription.Customer.FirstName,
-			subscription.Customer.LastName,
-			subscription.Customer.Country,
-			subscription.Billing.RebillDay,
-			subscription.Billing.RebillMonths,
-			subscription.Autorenew,
-			subscription.Status,
-			subscription.StartDate,
-			subscription.EndDate,
-		)
+		_, err = tx.Exec(stmtText, valueArgs...)
 		if err != nil {
 			return err
 		}
@@ -494,4 +514,15 @@ func opendb() (db *sql.DB) {
 	//Success!
 	log.Info("Returning Open DB...")
 	return db
+}
+
+func parseDate(dateStr string) (string, error) {
+	// Parse the input date string
+	t, err := time.Parse(time.RFC3339, dateStr)
+	if err != nil {
+		return "", err
+	}
+
+	// Return in the format MySQL expects
+	return t.Format("2006-01-02 15:04:05"), nil
 }
