@@ -194,7 +194,10 @@ type Order struct {
 }
 
 type CratejoyOrderResponse struct {
-	Results []Order `json:"results"`
+	Count   int         `json:"count"`
+	Next    string      `json:"next"`
+	Prev    interface{} `json:"prev"`
+	Results []Order     `json:"results"`
 }
 
 // setup logging
@@ -359,11 +362,18 @@ func Cratejoy(db *sql.DB) {
 	// Fetch data from Cratejoy
 	username := os.Getenv("CRATEJOY_CLIENT")
 	password := os.Getenv("CRATEJOY_API_KEY")
-	err := fetchCratejoyData(username, password, db)
+	//Fetch Orders
+	err := fetchCratejoyOrders(username, password, db)
 	if err != nil {
 		log.WithError(err).Error("Failed to fetch data from Cratejoy")
 		return
 	}
+	// //Fetch Subscriptions
+	// err = fetchCratejoyData(username, password, db)
+	// if err != nil {
+	// 	log.WithError(err).Error("Failed to fetch data from Cratejoy")
+	// 	return
+	// }
 }
 
 // Insert orders into the Database
@@ -381,13 +391,13 @@ func insertOrders(db *sql.DB, response CratejoyOrderResponse) error {
 	}).Info("Inserting orders into cj_orders table")
 
 	query := `
-		INSERT INTO cj_orders (
+		INSERT INTO orders.cj_orders (
 			id, card_refunded_amount, credit_applied, customer_id, financial_status, fulfillment_status, gift_card_discount,
 			gift_message, gift_renewal_notif, gross_shipping, is_gift, order_gift_info, is_renewal, is_test, note, 
 			placed_at, prorated_charge, refund_applied, refunded_amount, status, store_id, sub_total, total, total_app_fees, 
 			total_label_cost, total_pending_fees, total_price, total_shipping, total_tax, transaction_fees, 
 			transaction_fee_status, type, url) 
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON DUPLICATE KEY UPDATE
 		card_refunded_amount = VALUES(card_refunded_amount),
 		credit_applied = VALUES(credit_applied),
@@ -427,7 +437,17 @@ func insertOrders(db *sql.DB, response CratejoyOrderResponse) error {
 	for _, order := range response.Results {
 		orderGiftInfo, _ := json.Marshal(order.OrderGiftInfo)
 
-		_, err := db.Exec(query,
+		// Convert the placed_at datetime to MySQL compatible format
+		placedAt, err := parseDate(order.PlacedAt)
+		if err != nil {
+			log.WithFields(logrus.Fields{
+				"order_id": order.ID,
+				"error":    err,
+			}).Error("Failed to format placed_at date")
+			return err
+		}
+
+		_, err = db.Exec(query,
 			order.ID,
 			order.CardRefundedAmount,
 			order.CreditApplied,
@@ -443,7 +463,7 @@ func insertOrders(db *sql.DB, response CratejoyOrderResponse) error {
 			order.IsRenewal,
 			order.IsTest,
 			order.Note,
-			order.PlacedAt,
+			placedAt,
 			order.ProratedCharge,
 			order.RefundApplied,
 			order.RefundedAmount,
