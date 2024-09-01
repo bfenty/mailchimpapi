@@ -1103,9 +1103,22 @@ func fetchCratejoyData(username, password string, db *sql.DB) error {
 
 // fetchCratejoyOrders fetches order data from the Cratejoy API and processes it
 func fetchCratejoyOrders(username, password string, db *sql.DB) error {
-	// Define the Cratejoy endpoint for fetching orders
+	// Query the most recent placed_at date from the database
+	var mostRecentDate time.Time
+	query := "SELECT MAX(placed_at) FROM orders.cj_orders"
+	err := db.QueryRow(query).Scan(&mostRecentDate)
+	if err != nil {
+		log.WithError(err).Error("Failed to query the most recent placed_at date")
+		return err
+	}
+
+	// Subtract 5 days from the most recent date
+	filterDate := mostRecentDate.AddDate(0, 0, -5)
+	filterDateStr := filterDate.Format("2006-01-02T15:04:05Z") // Format to ISO 8601
+
+	// Define the Cratejoy endpoint for fetching orders with the filter
 	baseURL := "https://api.cratejoy.com/v1/orders/"
-	url := baseURL + "?limit=500"
+	url := fmt.Sprintf("%s?placed_at__gt=%s&limit=150", baseURL, filterDateStr)
 
 	log.Info("Fetching order data from Cratejoy API")
 
