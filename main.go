@@ -195,7 +195,7 @@ func main() {
 	defer db.Close()
 
 	MailChimp(db)
-	// Cratejoy(db)
+	Cratejoy(db)
 }
 
 // return an open database
