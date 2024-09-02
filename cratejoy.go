@@ -19,13 +19,13 @@ func Cratejoy(db *sql.DB) {
 	username := os.Getenv("CRATEJOY_CLIENT")
 	password := os.Getenv("CRATEJOY_API_KEY")
 	//Fetch Orders
-	// err := fetchCratejoyOrders(username, password, db)
-	// if err != nil {
-	// 	log.WithError(err).Error("Failed to fetch data from Cratejoy")
-	// 	return
-	// }
+	err := fetchCratejoyOrders(username, password, db)
+	if err != nil {
+		log.WithError(err).Error("Failed to fetch data from Cratejoy")
+		return
+	}
 	//Fetch Subscriptions
-	err := fetchCratejoyData(username, password, db)
+	err = fetchCratejoyData(username, password, db)
 	if err != nil {
 		log.WithError(err).Error("Failed to fetch data from Cratejoy")
 		return
