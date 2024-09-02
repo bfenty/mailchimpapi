@@ -618,7 +618,7 @@ func insertSubscriptions(db *sql.DB, response CratejoyResponse) error {
 	}
 	defer tx.Rollback()
 
-	query := `INSERT INTO cj_subscriptions 
+	query := `REPLACE INTO cj_subscriptions 
 	          (id, address_id, billing_id, customer_id, product_id, product_instance_id, term_id, autorenew, billing_name, credit, end_date, is_test, note, skipped_date, source, start_date, status, store_id, type, url) 
 	          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
