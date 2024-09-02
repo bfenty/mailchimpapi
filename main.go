@@ -1101,6 +1101,63 @@ func fetchCratejoyData(username, password string, db *sql.DB) error {
 	return nil
 }
 
+// sendCratejoyRequest handles the HTTP request with retry logic
+func sendCratejoyRequest(url, username, password string) (*http.Response, error) {
+	maxRetries := 5
+	var resp *http.Response
+	// var err error
+
+	for retry := 0; retry < maxRetries; retry++ {
+		log.Debug("Cratejoy API URL: ", url)
+
+		// Set up the HTTP request
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			log.WithError(err).Error("Failed to create new HTTP request")
+			return nil, err
+		}
+
+		// Encode username and password for basic authentication
+		authStr := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
+		req.Header.Add("Authorization", "Basic "+authStr)
+		log.Debug("Authorization header set for basic authentication")
+
+		// Send the API request
+		client := &http.Client{
+			Timeout: time.Second * 60, // 60-second timeout
+		}
+		log.Info("Sending request to Cratejoy API")
+		resp, err = client.Do(req)
+		if err != nil {
+			log.WithError(err).Error("Failed to send API request")
+			if retry < maxRetries-1 {
+				log.Warnf("Retrying request, attempt %d/%d...", retry+1, maxRetries)
+				continue
+			}
+			return nil, err
+		}
+
+		// Check for non-200 status code
+		if resp.StatusCode != http.StatusOK {
+			body, _ := ioutil.ReadAll(resp.Body) // Ignore error here; we're already handling an error case
+			log.WithFields(logrus.Fields{
+				"status_code": resp.StatusCode,
+				"response":    string(body),
+			}).Error("Cratejoy API responded with an error")
+			if retry < maxRetries-1 {
+				log.Warnf("Retrying request, attempt %d/%d...", retry+1, maxRetries)
+				continue
+			}
+			return nil, fmt.Errorf("Cratejoy API error: %d - %s", resp.StatusCode, string(body))
+		}
+
+		// If everything is successful, return the response
+		return resp, nil
+	}
+
+	return nil, fmt.Errorf("Failed to send request after %d retries", maxRetries)
+}
+
 // fetchCratejoyOrders fetches order data from the Cratejoy API and processes it
 func fetchCratejoyOrders(username, password string, db *sql.DB) error {
 	// Query the most recent placed_at date from the database
@@ -1123,27 +1180,11 @@ func fetchCratejoyOrders(username, password string, db *sql.DB) error {
 	log.Info("Fetching order data from Cratejoy API")
 
 	for {
-		log.Debug("Cratejoy API URL: ", url)
-		// Set up the HTTP request
-		req, err := http.NewRequest("GET", url, nil)
+		resp, err := sendCratejoyRequest(url, username, password)
 		if err != nil {
-			log.WithError(err).Error("Failed to create new HTTP request")
 			return err
 		}
 
-		// Encode username and password for basic authentication
-		authStr := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
-		req.Header.Add("Authorization", "Basic "+authStr)
-		log.Debug("Authorization header set for basic authentication")
-
-		// Send the API request
-		client := &http.Client{}
-		log.Info("Sending request to Cratejoy API")
-		resp, err := client.Do(req)
-		if err != nil {
-			log.WithError(err).Error("Failed to send API request")
-			return err
-		}
 		defer resp.Body.Close()
 
 		// Check for non-200 status code
