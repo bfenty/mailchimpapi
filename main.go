@@ -9,17 +9,6 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// Mailchimp structs
-type Member struct {
-	Email              string `json:"email_address"`
-	Status             string `json:"status"`
-	SubscriptionStatus string `json:"Subscription Status"`
-}
-type Response struct {
-	Members    []Member `json:"members"`
-	TotalItems int      `json:"total_items"`
-}
-
 // Cratejoy Structs
 type CratejoyResponse struct {
 	Count   int            `json:"count"`
@@ -205,8 +194,8 @@ func main() {
 	db := opendb()
 	defer db.Close()
 
-	// MailChimp(db)
-	Cratejoy(db)
+	MailChimp(db)
+	// Cratejoy(db)
 }
 
 // return an open database

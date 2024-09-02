@@ -10,141 +10,98 @@ import (
 	"strings"
 )
 
+// Mailchimp structs
+type Member struct {
+	Email              string `json:"email_address"`
+	Status             string `json:"status"`
+	SubscriptionStatus string `json:"Subscription Status"`
+	FullName           string `json:"full_name"`
+	ContactID          string `json:"contact_id"` // Assuming 'unique_id' is your contact_id in the JSON response
+}
+type Response struct {
+	Members    []Member `json:"members"`
+	TotalItems int      `json:"total_items"`
+}
+
 // run Mailchimp API
 func MailChimp(db *sql.DB) {
-
-	//Retrieve API credentials
 	apiKey := os.Getenv("apiKey")
-	listID := os.Getenv("listID")
+	listIDs := strings.Split(os.Getenv("listID"), ",")
 	count := "1000"
 
-	// Set up the API request to retrieve the first batch of members
-	url := "https://us6.api.mailchimp.com/3.0/lists/" + listID + "/members?fields=members.email_address,members.status,total_items,merge_fields.Subscription+Status&count=" + count
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		log.WithError(err).Error("Failed to create new HTTP request")
-		return
-	}
-	req.SetBasicAuth("username", apiKey)
-
-	// Send the API request
-	log.Info("Sending API request")
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.WithError(err).Error("Failed to send API request")
-		return
-	}
-	defer resp.Body.Close()
-
-	// Read the API response
-	log.Info("Reading response")
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		log.WithError(err).Error("Failed to read response body")
-		return
-	}
-	log.Debug("Raw JSON response: ", string(body))
-
-	// Parse the response JSON to CSV
-	// log.Info("Creating CSV file")
-	// file, err := os.Create("mailchimp-audience.csv")
-	// if err != nil {
-	// 	log.WithError(err).Error("Failed to create CSV file")
-	// 	return
-	// }
-	// defer file.Close()
-
-	log.Info("Parsing JSON response")
-
-	var response Response
-	err = json.Unmarshal(body, &response)
-	if err != nil {
-		log.WithError(err).Error("Failed to unmarshal JSON response")
-		return
-	}
-
-	log.Infof("Retrieved %d members out of %d", len(response.Members), response.TotalItems)
-
-	// Insert members into the database
-	err = insertMembers(db, response)
-	if err != nil {
-		log.WithError(err).Error("Failed to insert members into the database")
-		return
-	}
-
-	// Retrieve additional members with count and offset
-	totalCount := response.TotalItems
-	offset, _ := strconv.Atoi(count)
-
-	for offset < totalCount {
-		// Set up the API request to retrieve the next batch of members
-		url = "https://us6.api.mailchimp.com/3.0/lists/" + listID + "/members?fields=members.email_address,members.status,merge_fields.Subscription+Status&count=" + count + "&offset=" + strconv.Itoa(offset)
-		req, err = http.NewRequest("GET", url, nil)
-		if err != nil {
-			log.WithError(err).Error("Failed to create new HTTP request for next batch of members")
-			return
-		}
-		req.SetBasicAuth("username", apiKey)
-
-		// Send the API request
-		resp, err = client.Do(req)
-		if err != nil {
-			log.WithError(err).Error("Failed to send API request for next batch of members")
-			return
-		}
-		defer resp.Body.Close()
-
-		// Read the API response
-		body, err = ioutil.ReadAll(resp.Body)
-		if err != nil {
-			log.WithError(err).Error("Failed to read response body for next batch of members")
-			return
-		}
-
-		err = json.Unmarshal(body, &response)
-		if err != nil {
-			log.WithError(err).Error("Failed to unmarshal JSON response for next batch of members")
-			return
-		}
-
-		log.Infof("Retrieved %d members out of %d", offset, response.TotalItems)
-
-		// Insert members into the database
-		err = insertMembers(db, response)
-		if err != nil {
-			log.WithError(err).Error("Failed to insert members into the database")
-			return
-		}
-
-		offset += len(response.Members)
+	for _, listID := range listIDs {
+		processList(db, apiKey, listID, count)
 	}
 }
 
-// insert Mailchimp Members inserts members into the database
-func insertMembers(db *sql.DB, response Response) error {
-	var valuePlaceholders []string
-	var memberData []interface{}
+func processList(db *sql.DB, apiKey, listID, count string) {
+	client := &http.Client{}
+	offset := 0
+	totalCount := 1 // Initialize to force entry into the loop
 
-	for _, member := range response.Members {
-		valuePlaceholders = append(valuePlaceholders, "(?, ?)")
-		memberData = append(memberData, member.Email, member.Status) // Add more fields if needed
+	for offset < totalCount {
+		url := "https://us6.api.mailchimp.com/3.0/lists/" + listID + "/members?fields=members.email_address,members.status,members.full_name,merge_fields.Subscription+Status,members.contact_id,total_items&count=" + count + "&offset=" + strconv.Itoa(offset)
+		log.Printf("Making API request to URL: %s", url) // Log the URL of the API request
+
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			log.Printf("Failed to create HTTP request: %v", err)
+			continue
+		}
+		req.SetBasicAuth("username", apiKey) // Assuming 'username' is a placeholder
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("Failed to send HTTP request: %v", err)
+			continue
+		}
+
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("Failed to read response body: %v", err)
+			resp.Body.Close()
+			continue
+		}
+		resp.Body.Close() // It's good practice to close the body right after reading
+
+		// log.Printf("API Response received: %s", string(body)) // Log raw response body
+
+		var response Response
+		if err = json.Unmarshal(body, &response); err != nil {
+			log.Printf("Failed to unmarshal JSON: %v", err)
+			continue
+		}
+
+		log.Printf("Processing %d members from list ID: %s", len(response.Members), listID) // Log number of members being processed
+
+		if err = insertMembers(db, listID, response); err != nil {
+			log.Printf("Failed to insert members into database: %v", err)
+			continue
+		}
+
+		log.Printf("Inserted members successfully, continuing to next batch") // Log successful insertion
+
+		offset += len(response.Members)
+		totalCount = response.TotalItems
+		log.Printf("Updated offset: %d, Total members: %d", offset, totalCount) // Log progress of member retrieval
 	}
 
-	if len(valuePlaceholders) == 0 {
-		// No members to insert
+	log.Printf("Completed processing all members for list ID: %s", listID) // Log completion of processing for a list
+}
+
+func insertMembers(db *sql.DB, listID string, response Response) error {
+	valueStrings := []string{}
+	valueArgs := []interface{}{}
+	for _, member := range response.Members {
+		valueStrings = append(valueStrings, "(?, ?, ?, ?, ?)")
+		valueArgs = append(valueArgs, listID, member.ContactID, member.Email, member.Status, member.FullName)
+	}
+
+	if len(valueStrings) == 0 {
 		return nil
 	}
 
-	stmtText := "REPLACE INTO mailchimp(email, status) VALUES " + strings.Join(valuePlaceholders, ",")
-	stmt, err := db.Prepare(stmtText)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-
-	_, err = stmt.Exec(memberData...)
-	if err != nil {
+	stmt := "REPLACE INTO mailchimp (list_id, contact_id, email, status, full_name) VALUES " + strings.Join(valueStrings, ",")
+	if _, err := db.Exec(stmt, valueArgs...); err != nil {
 		return err
 	}
 
